@@ -5,7 +5,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.jflac.FLACDecoder;
 import org.jflac.metadata.StreamInfo;
@@ -27,6 +28,7 @@ import javazoom.jl.decoder.OutputBuffer;
  * @author exch
  */
 public abstract class PCM<T> {
+	private static final Logger logger = LoggerFactory.getLogger(PCM.class);
 
 	protected static final boolean USE_UNSAFE = false;
 
@@ -91,7 +93,7 @@ public abstract class PCM<T> {
 			if(pcm.validate()) {
 				return pcm;
 			} else {
-				Logger.getGlobal().warning("音源の読み込みに失敗しました - file : " + p);
+				logger.warn("音源の読み込みに失敗しました - file : {}", p);
 				return null;
 			}
 		} catch (IOException e) {
@@ -180,6 +182,7 @@ public abstract class PCM<T> {
 				try (WavInputStream input = new WavInputStream(new BufferedInputStream(Files.newInputStream(p)))) {
 					switch(input.type) {
 					case 1:
+                    case 3:
 						{
 						channels = input.channels;
 						sampleRate = input.sampleRate;
@@ -203,9 +206,9 @@ public abstract class PCM<T> {
 						sampleRate = input.sampleRate;
 						bitsPerSample = 16;
 						blockAlign = input.blockAlign;
-//						Logger.getGlobal().info("channels: " + channels);
-//						Logger.getGlobal().info("sample rate: " + sampleRate);
-//						Logger.getGlobal().info("block align" + blockAlign);
+//						logger.info("channels: " + channels);
+//						logger.info("sample rate: " + sampleRate);
+//						logger.info("block align" + blockAlign);
 
 						OptimizedByteArrayOutputStream inputByteStream = new OptimizedByteArrayOutputStream(input.dataRemaining);
 						StreamUtils.copyStream(input, inputByteStream);
@@ -215,53 +218,10 @@ public abstract class PCM<T> {
 						pcm = decoder.decode(inputByteBuffer);
 
 
-						Logger.getGlobal().info("Filename: " + p );
+						logger.info("Filename: {}", p);
 						break;
 					}
-					// IMA-ADPCM Decoder
-/* 					case 11:
-					{
-						ByteBuffer wavinput = wavfile.getReadOnlyData();
-						channels = input.channels;
-						sampleRate = input.sampleRate;
-						bitsPerSample = input.bitsPerSample;
-						int blockSize = ADPCMUtil.computeBlockSize(channels, sampleRate);
 
-						OptimizedByteArrayOutputStream output2 = new OptimizedByteArrayOutputStream(input.dataRemaining);
-						StreamUtils.copyStream(input, output2);
-						ByteBuffer input_test = ByteBuffer.wrap(output2.getBuffer()).order(ByteOrder.LITTLE_ENDIAN);
-						pcm.limit(output2.size());
-						if (wavinput == input_test) {
-							Logger.getGlobal().info("They are the same");
-						} else {
-							Logger.getGlobal().info("They are the different");
-						}
-						OptimizedByteArrayOutputStream output = new OptimizedByteArrayOutputStream(input.dataRemaining);
-						StreamUtils.copyStream(input, output);
-						ByteBuffer temp = ByteBuffer.wrap(output.getBuffer()).order(ByteOrder.LITTLE_ENDIAN);
-						temp.limit(output.size());
-
-						ADPCMDecoderConfig cfg =
-						    ADPCMDecoder.configure()
-							.setChannels(channels)
-							.setBlockSize(blockSize)
-							.setSampleRate(sampleRate)
-							.end();
-
-						ByteBuffer pcmOutput = ByteBuffer.allocate(wavfile.getNumSamples() * wavfile.getChannels() * 2);
-						pcm = new ADPCMDecoder(cfg).decode(wavinput, pcmOutput);
-
-						// pcm =
-						//     new ADPCMDecoder(cfg)
-						// 	.decode(
-						// 		temp,
-						// 		ByteBuffer.allocate(input.dataRemaining)
-						// 	);
-						pcm.rewind();
-
-						break;
-
-					} */
 					case 85:
 						// mp3
 					{
@@ -304,7 +264,7 @@ public abstract class PCM<T> {
 						throw new IOException(p.toString() + " unsupported WAV format ID : " + input.type);					
 					}
 				} catch (Throwable e) {
-					Logger.getGlobal().warning("WAV処理中の例外 - file : " + p + " error : "+ e.getMessage() + e);
+					logger.warn("WAV処理中の例外 - file : {} error : {}{}", p, e.getMessage(), e.toString());
 				}
 			} else if (name.endsWith(".ogg")) {
 				// ogg
@@ -408,7 +368,7 @@ public abstract class PCM<T> {
 				}
 			}
 //			if(bytes != orgbytes) {
-//				Logger.getGlobal().info("終端の無音データ除外 - " + p.getFileName().toString() + " : " + (orgbytes - bytes) + " bytes");
+//				logger.info("終端の無音データ除外 - " + p.getFileName().toString() + " : " + (orgbytes - bytes) + " bytes");
 //			}
 			if(bytes < channels * bitsPerSample / 8) {
 				throw new IOException(p.toString() + " : 0 samples");			

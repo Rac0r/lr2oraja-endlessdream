@@ -5,12 +5,10 @@ import static bms.player.beatoraja.obs.ObsWsClient.ObsRecordingMode;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.*;
 import java.text.ParseException;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import bms.player.beatoraja.system.RobustFile;
 import java.util.Map;
@@ -30,6 +28,7 @@ import com.badlogic.gdx.utils.SerializationException;
  * @author exch
  */
 public class Config implements Validatable {
+	private static final Logger logger = LoggerFactory.getLogger(Config.class);
 	
 	/**
 	 * 旧コンフィグパス。そのうち削除
@@ -187,6 +186,8 @@ public class Config implements Validatable {
 	// Only for passing parameter, not used as a config option
 	private String defaultDownloadURL = HttpDownloadProcessor.getDefaultDownloadSource().getDefaultURL();
 	private String overrideDownloadURL = "";
+	private String downloadDirectory = DEFAULT_DOWNLOAD_DIRECTORY;
+	public static final String DEFAULT_DOWNLOAD_DIRECTORY = "http_download";
 
 	private int irSendCount = 5;
 
@@ -634,6 +635,14 @@ public class Config implements Validatable {
 		this.enableIpfs = enableIpfs;
 	}
 
+	public String getDownloadDirectory() {
+		return downloadDirectory;
+	}
+
+	public void setDownloadDirectory(String downloadDirectory) {
+		this.downloadDirectory = downloadDirectory;
+	}
+
 	public String getIpfsUrl() {
 		return ipfsurl;
 	}
@@ -860,6 +869,7 @@ public class Config implements Validatable {
 		tablepath = tablepath != null ? tablepath : TABLEPATH_DEFAULT;
 		playerpath = playerpath != null ? playerpath : PLAYERPATH_DEFAULT;
 		skinpath = skinpath != null ? skinpath : SKINPATH_DEFAULT;
+		downloadDirectory = validatePath(downloadDirectory) ? downloadDirectory : DEFAULT_DOWNLOAD_DIRECTORY;
 		return true;
 	}
 
@@ -909,9 +919,9 @@ public class Config implements Validatable {
 		try {
             Path configBackupPath = configpath.resolveSibling("config_sys_backup.json");
 			Files.copy(configpath, configBackupPath, StandardCopyOption.REPLACE_EXISTING);
-			Logger.getGlobal().info("Backup config written to " + configBackupPath);
+			logger.info("Backup config written to {}", configBackupPath);
 		} catch (IOException e) {
-			Logger.getGlobal().severe("Failed to write backup config file: " + e.getLocalizedMessage());
+			logger.error("Failed to write backup config file: {}", e.getLocalizedMessage());
 		}
 	}
 
@@ -963,5 +973,14 @@ public class Config implements Validatable {
 
 	public enum SongPreview {
 		NONE,ONCE,LOOP;
+	}
+
+	private boolean validatePath(String path) {
+		try {
+			Paths.get(path);
+		} catch (InvalidPathException | NullPointerException e) {
+			return false;
+		}
+		return true;
 	}
 }

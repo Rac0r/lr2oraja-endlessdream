@@ -1,11 +1,14 @@
 package bms.player.beatoraja.ir;
 
-import java.util.Arrays;
-import java.util.logging.Logger;
-
-import bms.player.beatoraja.*;
+import bms.player.beatoraja.CourseData;
 import bms.player.beatoraja.MainController.IRStatus;
+import bms.player.beatoraja.MainState;
+import bms.player.beatoraja.ScoreData;
 import bms.player.beatoraja.song.SongData;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.Arrays;
 
 /**
  * IRのランキングデータ
@@ -13,6 +16,7 @@ import bms.player.beatoraja.song.SongData;
  * @author exch
  */
 public class RankingData {
+	private static final Logger logger = LoggerFactory.getLogger(RankingData.class);
 	/**
 	 * 選択されている楽曲の現在のIR順位
 	 */
@@ -59,28 +63,31 @@ public class RankingData {
 	public void load(MainState mainstate, Object song) {
 		if(!(song instanceof SongData || song instanceof CourseData)) {
 			return;
-		}		
+		}
 		state = ACCESS;
 		Thread irprocess = new Thread(() -> {
 			final IRStatus[] ir = mainstate.main.getIRStatus();
 	        IRResponse<IRScoreData[]> response = null;
-	        if(song instanceof SongData) {
-	        	 response = ir[0].connection.getPlayData(null, new IRChartData((SongData) song));
-	        } else if(song instanceof CourseData) {
-		        response = ir[0].connection.getCoursePlayData(null, new IRCourseData((CourseData) song, mainstate.main.getPlayerConfig().getLnmode()));
-	        }
+            if (song instanceof SongData songData) {
+                response = ir[0].connection.getPlayData(null, new IRChartData(songData));
+                if (response.isSucceeded()) {
+                    var lnMode = mainstate.main.getPlayerResource().getPlayerConfig().getLnmode();
+                    mainstate.main.getRivalDataAccessor().updateAllRivalsScores(response.getData(), songData, lnMode);
+                }
+            } else if (song instanceof CourseData) {
+                response = ir[0].connection.getCoursePlayData(null, new IRCourseData((CourseData) song, mainstate.main.getPlayerConfig().getLnmode()));
+            }
 	        if(response.isSucceeded()) {
 	        	updateScore(response.getData(), mainstate.getScoreDataProperty().getScoreData());
-	            Logger.getGlobal().fine("IRからのスコア取得成功 : " + response.getMessage());
+				logger.trace("IRからのスコア取得成功 : {}", response.getMessage());
 				state = FINISH;
 	        } else {
-	            Logger.getGlobal().warning("IRからのスコア取得失敗 : " + response.getMessage());
+				logger.warn("IRからのスコア取得失敗 : {}", response.getMessage());
 				state = FAIL;
 	        }
 	        lastUpdateTime = System.currentTimeMillis();
 		});
 		irprocess.start();
-
 	}
 	
 	public void updateScore(IRScoreData[] scores, ScoreData localscore) {

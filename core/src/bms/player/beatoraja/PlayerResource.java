@@ -19,7 +19,8 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.concurrent.Future;
 
 /**
@@ -28,6 +29,7 @@ import java.util.concurrent.Future;
  * @author exch
  */
 public final class PlayerResource {
+	private static final Logger logger = LoggerFactory.getLogger(PlayerResource.class);
 	
 	/**
 	 * 選曲中のBMS
@@ -169,7 +171,7 @@ public final class PlayerResource {
 		replay = new ReplayData();
 		model = loadBMSModel(f, pconfig.getLnmode());
 		if (model == null) {
-			Logger.getGlobal().warning("楽曲が存在しないか、解析時にエラーが発生しました:" + f.toString());
+			logger.warn("楽曲が存在しないか、解析時にエラーが発生しました:{}", f.toString());
 			return false;
 		}
 		if (model.getAllTimeLines().length == 0) {
@@ -567,7 +569,7 @@ public final class PlayerResource {
 		setTablelevel("");
 	}
 
-	public List<String> getReverseLookupData(String md5, String sha256) {
+	public List<String> getReverseLookupData() {
 		Set<String> urlSet = new HashSet<>(List.of(this.getConfig().getTableURL()));
 		TableDataAccessor tdaccessor = new TableDataAccessor(config.getTablepath());
 		TableData[] tds = tdaccessor.readAll();
@@ -596,6 +598,36 @@ public final class PlayerResource {
 		}
 		return reverseLookup;
 	}
+
+    public List<String> getReverseLookupLevels() {
+        Set<String> urlSet = new HashSet<>(List.of(this.getConfig().getTableURL()));
+        TableDataAccessor tdaccessor = new TableDataAccessor(config.getTablepath());
+        TableData[] tds = tdaccessor.readAll();
+        List<String> reverseLookup = new ArrayList<>();
+        for (TableData td : tds) {
+            if (!urlSet.contains(td.getUrl())) {
+                continue;
+            }
+            TableFolder[] tfs = td.getFolder();
+            boolean found = false;
+            for (TableFolder tf : tfs) {
+                SongData[] tss = tf.getSong();
+                for (SongData ts : tss) {
+                    boolean matchOnMd5 = !ts.getMd5().isEmpty() && ts.getMd5().equals(this.getSongdata().getMd5());
+                    boolean matchOnSha256 = !ts.getSha256().isEmpty() && ts.getSha256().equals(this.getSongdata().getSha256());
+                    if (matchOnMd5 || matchOnSha256) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) {
+                    reverseLookup.add(tf.getName());
+                    break;
+                }
+            }
+        }
+        return reverseLookup;
+    }
 
 	public ReplayData getChartOption() {
 		return chartOption;

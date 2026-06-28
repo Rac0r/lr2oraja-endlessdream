@@ -6,7 +6,8 @@ import java.io.BufferedInputStream;
 import java.lang.reflect.Method;
 import java.nio.file.*;
 import java.util.*;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -38,6 +39,7 @@ import bms.player.beatoraja.song.SongInformationAccessor;
  * @author exch
  */
 public class BarManager {
+	private static final Logger logger = LoggerFactory.getLogger(BarManager.class);
 	
 	private final MusicSelector select;
 	/**
@@ -188,7 +190,7 @@ public class BarManager {
 					}
 				}
 			} else {
-				Logger.getGlobal().warning("IRからのテーブル取得失敗 : " + response.getMessage());
+				logger.warn("IRからのテーブル取得失敗 : {}", response.getMessage());
 			}
 		}
 
@@ -471,7 +473,7 @@ public class BarManager {
 		} else {
 			updateBar(null);
 		}
-		Logger.getGlobal().warning("楽曲がありません");
+		logger.warn("楽曲がありません");
 		return false;
 	}
 
@@ -756,28 +758,24 @@ public class BarManager {
 		public void run() {
 			final MainController main = select.main;
 			final PlayerConfig config = select.resource.getPlayerConfig();
-			final ScoreDataCache rival = select.getRivalScoreDataCache();
-			final String rivalName = rival != null ? select.getRival().getName() : null;
+            var rivalDataAccessor = main.getRivalDataAccessor();
 
 			final SongData[] songs = Stream.of(bars).filter(bar -> bar instanceof SongBar && ((SongBar) bar).existsSong())
 					.map(bar -> ((SongBar) bar).getSongData()).toArray(SongData[]::new);
 			// loading score
 			// TODO collectorを使用してスコアをまとめて取得
 			for (Bar bar : bars) {
-				if (bar instanceof SongBar && ((SongBar) bar).existsSong()) {
-					SongData sd = ((SongBar) bar).getSongData();
-					if (bar.getScore() == null) {
-						bar.setScore(select.getScoreDataCache().readScoreData(sd, config.getLnmode()));
+                if (bar instanceof SongBar songBar && songBar.existsSong()) {
+                    var songData = songBar.getSongData();
+                    if (songBar.getScore() == null) {
+                        songBar.setScore(select.getScoreDataCache().readScoreData(songData, config.getLnmode()));
 					}
-					if (rival != null && bar.getRivalScore() == null) {
-						final ScoreData rivalScore = rival.readScoreData(sd, config.getLnmode());
-						if(rivalScore != null) {
-							rivalScore.setPlayer(rivalName);							
-						}
-						bar.setRivalScore(rivalScore);
+					if (rivalDataAccessor.isRivalSelected() && bar.getRivalScore() == null) {
+                        var rivalScore = rivalDataAccessor.getCurrentRivalScore(songData, config.getLnmode());
+                        songBar.setRivalScore(rivalScore);
 					}
 					for(int i = 0;i < MusicSelector.REPLAY;i++) {
-						((SongBar) bar).setExistsReplay(i, main.getPlayDataAccessor().existsReplayData(sd.getSha256(), sd.hasUndefinedLongNote(),config.getLnmode(), i));						
+                        songBar.setExistsReplay(i, main.getPlayDataAccessor().existsReplayData(songData.getSha256(), songData.hasUndefinedLongNote(),config.getLnmode(), i));
 					}
 				} else if (bar instanceof GradeBar && ((GradeBar)bar).existsAllSongs()) {
 					final GradeBar gb = (GradeBar) bar;
@@ -792,7 +790,7 @@ public class BarManager {
 					gb.setMirrorScore(main.getPlayDataAccessor().readScoreData(hash, ln, config.getLnmode(), 1, constraint));
 					gb.setRandomScore(main.getPlayDataAccessor().readScoreData(hash, ln, config.getLnmode(), 2, constraint));
 					for(int i = 0;i < MusicSelector.REPLAY;i++) {
-						gb.setExistsReplay(i, main.getPlayDataAccessor().existsReplayData(hash, ln ,config.getLnmode(), i, constraint));						
+						gb.setExistsReplay(i, main.getPlayDataAccessor().existsReplayData(hash, ln ,config.getLnmode(), i, constraint));
 					}
 				}
 
@@ -823,7 +821,7 @@ public class BarManager {
 							songbar.setBanner(select.getBannerResource().get(bannerfile.toString()));
 						}
 					} catch (Exception e) {
-						Logger.getGlobal().warning("banner読み込み失敗 : " + song.getBanner());
+						logger.warn("banner読み込み失敗 : {}", song.getBanner());
 					}
 					try {
 						Path stagefilefile = Paths.get(song.getPath()).getParent().resolve(song.getStagefile());
@@ -832,7 +830,7 @@ public class BarManager {
 							songbar.setStagefile(select.getStagefileResource().get(stagefilefile.toString()));
 						}
 					} catch (Exception e) {
-						Logger.getGlobal().warning("stagefile読み込み失敗 : " + song.getStagefile());
+						logger.warn("stagefile読み込み失敗 : {}", song.getStagefile());
 					}
 				}
 				if (stop) {

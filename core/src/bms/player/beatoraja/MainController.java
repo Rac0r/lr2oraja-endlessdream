@@ -3,7 +3,10 @@ package bms.player.beatoraja;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.logging.Logger;
+
+import bms.player.beatoraja.rivals.RivalDataAccessor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import bms.player.beatoraja.exceptions.PlayerConfigException;
 import bms.player.beatoraja.modmenu.*;
@@ -43,12 +46,15 @@ import bms.player.beatoraja.song.*;
 import bms.player.beatoraja.stream.StreamController;
 import bms.tool.mdprocessor.MusicDownloadProcessor;
 
+import static bms.player.beatoraja.modmenu.ImGuiRenderer.getShowModMenu;
+
 /**
  * アプリケーションのルートクラス
  *
  * @author exch
  */
 public class MainController {
+	private static final Logger logger = LoggerFactory.getLogger(MainController.class);
 
 	private static final String VERSION = Version.versionLong;
 
@@ -62,7 +68,6 @@ public class MainController {
 	private final Calendar cl = Calendar.getInstance();
 	private long mouseMovedTime;
 
-	private BMSPlayer bmsplayer;
 	private MusicDecide decide;
 	private MusicSelector selector;
 	private MusicResult result;
@@ -148,7 +153,7 @@ public class MainController {
             try {
                 player = PlayerConfig.readPlayerConfig(config.getPlayerpath(), config.getPlayername());
             } catch (PlayerConfigException e) {
-                Logger.getGlobal().severe(e.getLocalizedMessage());
+                logger.error(e.getLocalizedMessage());
             }
         }
 		this.player = player;
@@ -166,7 +171,7 @@ public class MainController {
 			}
 		}
 		if (config.isEnableHttp()) {
-			Path httpdlPath = Paths.get("http_download").toAbsolutePath();
+			Path httpdlPath = Paths.get(config.getDownloadDirectory()).toAbsolutePath();
 			if (!httpdlPath.toFile().exists())
 				httpdlPath.toFile().mkdirs();
 			List<String> roots = new ArrayList<>(Arrays.asList(getConfig().getBmsroot()));
@@ -186,6 +191,34 @@ public class MainController {
 
 		playdata = new PlayDataAccessor(config);
 
+		initializeIRConfig();
+
+		switch(config.getAudioConfig().getDriver()) {
+			case PortAudio:
+				try {
+					audio = new PortAudioDriver(config);
+				} catch(Throwable e) {
+					e.printStackTrace();
+					config.getAudioConfig().setDriver(DriverType.OpenAL);
+				}
+				break;
+		}
+
+		timer = new TimerManager();
+		sound = new SystemSoundManager(this);
+
+		if(config.isUseDiscordRPC()) {
+			stateListener.add(new DiscordListener());
+		}
+
+		if(config.isUseObsWs()) {
+			obsListener = new ObsListener(config);
+			obsClient = obsListener.getObsClient();
+			stateListener.add(obsListener);
+		}
+	}
+
+	private void initializeIRConfig() {
 		Array<IRStatus> irarray = new Array<IRStatus>();
 		for(IRConfig irconfig : player.getIrconfig()) {
 			final IRConnection ir = IRConnectionManager.getIRConnection(irconfig.getIrname());
@@ -197,15 +230,15 @@ public class MainController {
 						if(response.isSucceeded()) {
 							irarray.add(new IRStatus(irconfig, ir, response.getData()));
 						} else {
-							Logger.getGlobal().warning("IRへのログイン失敗 : " + response.getMessage());
+							logger.warn("IRへのログイン失敗 : {}", response.getMessage());
 						}
 					} catch (IllegalArgumentException e) {
-						Logger.getGlobal().info("trying pre-0.8.5 IR login method");
+						logger.info("trying pre-0.8.5 IR login method");
 						IRResponse<IRPlayerData> response = ir.login(irconfig.getUserid(), irconfig.getPassword());
 						if(response.isSucceeded()) {
 							irarray.add(new IRStatus(irconfig, ir, response.getData()));
 						} else {
-							Logger.getGlobal().warning("IRへのログイン失敗 : " + response.getMessage());
+							logger.warn("IRへのログイン失敗 : {}", response.getMessage());
 						}
 					}
 				}
@@ -215,30 +248,6 @@ public class MainController {
 		ir = irarray.toArray(IRStatus.class);
 		
 		rivals.update(this);
-
-		switch(config.getAudioConfig().getDriver()) {
-		case PortAudio:
-			try {
-				audio = new PortAudioDriver(config);
-			} catch(Throwable e) {
-				e.printStackTrace();
-				config.getAudioConfig().setDriver(DriverType.OpenAL);
-			}
-			break;
-		}
-
-		timer = new TimerManager();
-		sound = new SystemSoundManager(this);
-		
-		if(config.isUseDiscordRPC()) {
-			stateListener.add(new DiscordListener());
-		}
-
-		if(config.isUseObsWs()) {
-			obsListener = new ObsListener(config);
-			obsClient = obsListener.getObsClient();
-			stateListener.add(obsListener);
-		}
 	}
 
 	public boolean hasObsListener() {
@@ -326,18 +335,7 @@ public class MainController {
 		}
 
 		if (newState != null && current != newState) {
-			newState.create();
-			if(newState.getSkin() != null) {
-				newState.getSkin().prepare(newState);
-			}
-			if(current != null) {
-				current.shutdown();
-				current.setSkin(null);
-			}
-			current = newState;
-			timer.setMainState(newState);
-			current.prepare();
-			updateMainStateListener(0);
+			changeState(newState);
 		}
 		if (current.getStage() != null) {
 			Gdx.input.setInputProcessor(new InputMultiplexer(current.getStage(), input.getKeyBoardInputProcesseor()));
@@ -346,10 +344,46 @@ public class MainController {
 		}
 	}
 
-	private MainState createBMSPlayerState() {
-		if (bmsplayer != null) {
-			bmsplayer.dispose();
+	private void changeState(MainState newState) {
+		newState.create();
+		if(newState.getSkin() != null) {
+			newState.getSkin().prepare(newState);
 		}
+		if(current != null) {
+			current.shutdown();
+			current.setSkin(null);
+		}
+		current = newState;
+		timer.setMainState(newState);
+		current.prepare();
+		updateMainStateListener(0);
+	}
+
+	public void loadNewProfile(PlayerConfig pc) {
+		config.setPlayername(pc.getId());
+		player = pc;
+
+		playdata = new PlayDataAccessor(config);
+
+		initializeIRConfig();
+		// Dispose MusicSelector to unallocate loaded skin
+		selector.dispose();
+		initializeStates();
+		updateStateReferences();
+		triggerLnWarning();
+		setTargetList();
+
+		changeState(selector);
+		if (current.getStage() != null) {
+			Gdx.input.setInputProcessor(new InputMultiplexer(current.getStage(), input.getKeyBoardInputProcesseor()));
+		} else {
+			Gdx.input.setInputProcessor(input.getKeyBoardInputProcesseor());
+		}
+
+		lastConfigSave = System.nanoTime();
+	}
+
+	private MainState createBMSPlayerState() {
 		return new BMSPlayer(this, resource);
 	}
 
@@ -388,7 +422,6 @@ public class MainController {
 
         try (var perf = PerformanceMetrics.get().Event("ImGui init")) {
             ImGuiRenderer.init();
-            SkinMenu.init(this, player);
         }
 
         try (var perf = PerformanceMetrics.get().Event("System font load")) {
@@ -398,7 +431,7 @@ public class MainController {
 			systemfont = generator.generateFont(parameter);
 			generator.dispose();
 		} catch (GdxRuntimeException e) {
-			Logger.getGlobal().severe("System Font読み込み失敗");
+			logger.error("System Font読み込み失敗");
 		}
 
         try (var perf = PerformanceMetrics.get().Event("Input Processor constructor")) {
@@ -413,24 +446,10 @@ public class MainController {
 //			audio = new GdxAudioDeviceDriver(config);
 //			break;
 		}
-
 		loudnessAnalyzer = new BMSLoudnessAnalyzer(config);
-		resource = new PlayerResource(audio, config, player, loudnessAnalyzer);
-        try (var perf = PerformanceMetrics.get().Event("MusicSelector constructor")) {
-            selector = new MusicSelector(this, songUpdated);
-        }
-
-		if(player.getRequestEnable()) {
-		    streamController = new StreamController(selector);
-	        streamController.run();
-		}
-		SongManagerMenu.injectMusicSelector(selector);
+    	initializeStates();
+		updateStateReferences();
 		MiscSettingMenu.setMain(this);
-		decide = new MusicDecide(this);
-		result = new MusicResult(this);
-		gresult = new CourseResult(this);
-		keyconfig = new KeyConfiguration(this);
-		skinconfig = new SkinConfiguration(this, player);
 		if (bmsfile != null) {
 			if(resource.setBMSFile(bmsfile, auto)) {
 				changeState(MainStateType.PLAY);
@@ -443,7 +462,7 @@ public class MainController {
 			changeState(MainStateType.MUSICSELECT);
 		}
 
-		Logger.getGlobal().info("初期化時間(ms) : " + (System.currentTimeMillis() - t));
+		logger.info("初期化時間(ms) : {}", System.currentTimeMillis() - t);
 
 		Thread polling = new Thread(() -> {
 			long time = 0;
@@ -462,25 +481,9 @@ public class MainController {
 		});
 		polling.start();
 
-        String lnModeName = switch (player.getLnmode()) {
-            case 1 -> "CN";
-            case 2 -> "HCN";
-            default -> "LN";
-        };
-        if (!lnModeName.equals("LN")) {
-            // give them a really insistent warning
-            String lnWarning = "Long Note mode is " + lnModeName + ".\n"
-                               + "This is not recommended.\n"
-                               + "Your scores may be incompatible with IR.\n"
-                               + "You may change this in play options.";
-            ImGuiNotify.warning(lnWarning, 8000);
-        }
+        triggerLnWarning();
 
-		Array<String> targetlist = new Array<String>(player.getTargetlist());
-		for(int i = 0;i < rivals.getRivalCount();i++) {
-			targetlist.add("RIVAL_" + (i + 1));
-		}
-		TargetProperty.setTargets(targetlist.toArray(String.class), this);
+		setTargetList();
 
 		Pixmap plainPixmap = new Pixmap(2,1, Pixmap.Format.RGBA8888);
 		plainPixmap.drawPixel(0,0, Color.toIntBits(255,0,0,0));
@@ -506,7 +509,7 @@ public class MainController {
 
 		if (config.isEnableHttp()) {
 			HttpDownloadSource httpDownloadSource = HttpDownloadProcessor.DOWNLOAD_SOURCES.get(config.getDownloadSource()).build(config);
-			httpDownloadProcessor = new HttpDownloadProcessor(this, httpDownloadSource);
+			httpDownloadProcessor = new HttpDownloadProcessor(this, httpDownloadSource, config.getDownloadDirectory());
 			DownloadTaskState.initialize(httpDownloadProcessor);
 			DownloadTaskMenu.setProcessor(httpDownloadProcessor);
 		}
@@ -540,7 +543,7 @@ public class MainController {
 							} catch (InterruptedException e) {
 							}
 						} catch (Exception e) {
-							Logger.getGlobal().severe(e.getMessage());
+							logger.error(e.getMessage());
 						}
 				}
 			});
@@ -548,6 +551,54 @@ public class MainController {
 		}
 
         lastConfigSave = System.nanoTime();
+	}
+
+	private void initializeStates() {
+		resource = new PlayerResource(audio, config, player, loudnessAnalyzer);
+
+		try (var perf = PerformanceMetrics.get().Event("MusicSelector constructor")) {
+			selector = new MusicSelector(this, songUpdated);
+		}
+
+		if(player.getRequestEnable()) {
+			streamController = new StreamController(selector);
+			streamController.run();
+		}
+
+		decide = new MusicDecide(this);
+		result = new MusicResult(this);
+		gresult = new CourseResult(this);
+		keyconfig = new KeyConfiguration(this);
+		skinconfig = new SkinConfiguration(this, player);
+	}
+
+	private void updateStateReferences() {
+		SkinMenu.init(this, player);
+		SongManagerMenu.injectMusicSelector(selector);
+	}
+
+	private void triggerLnWarning() {
+		String lnModeName = switch (player.getLnmode()) {
+			case 1 -> "CN";
+			case 2 -> "HCN";
+			default -> "LN";
+		};
+		if (!lnModeName.equals("LN")) {
+			// give them a really insistent warning
+			String lnWarning = "Long Note mode is " + lnModeName + ".\n"
+				+ "This is not recommended.\n"
+				+ "Your scores may be incompatible with IR.\n"
+				+ "You may change this in play options.";
+			ImGuiNotify.warning(lnWarning, 8000);
+		}
+	}
+
+	private void setTargetList() {
+		Array<String> targetlist = new Array<String>(player.getTargetlist());
+		for(int i = 0;i < rivals.getRivalCount();i++) {
+			targetlist.add("RIVAL_" + (i + 1));
+		}
+		TargetProperty.setTargets(targetlist.toArray(String.class), this);
 	}
 
 	private long prevtime;
@@ -672,7 +723,11 @@ public class MainController {
             	input.setMouseMoved(false);
             	mouseMovedTime = time;
 			}
-			Gdx.input.setCursorCatched(current == bmsplayer && time > mouseMovedTime + 5000);
+            if (!getShowModMenu() && current instanceof BMSPlayer) {
+                Gdx.input.setCursorCatched(time > mouseMovedTime + 2000);
+            } else {
+            	Gdx.input.setCursorCatched(false);
+            }
 			// FPS表示切替
             if (input.isActivated(KeyCommand.SHOW_FPS)) {
                 showfps = !showfps;
@@ -781,9 +836,6 @@ public class MainController {
 	public void dispose() {
 		saveConfig();
 
-		if (bmsplayer != null) {
-			bmsplayer.dispose();
-		}
 		if (selector != null) {
 			selector.dispose();
 		}
@@ -817,7 +869,7 @@ public class MainController {
 			loudnessAnalyzer.shutdown();
 		}
 
-		Logger.getGlobal().info("全リソース破棄完了");
+		logger.info("全リソース破棄完了");
 	}
 
 	public void pause() {
@@ -835,7 +887,7 @@ public class MainController {
 	public void saveConfig(){
 		Config.write(config);
 		PlayerConfig.write(config.getPlayerpath(), player);
-		Logger.getGlobal().info("設定情報を保存");
+		logger.info("設定情報を保存");
 	}
 
     private long lastConfigSave = 0;
@@ -847,10 +899,10 @@ public class MainController {
 
         // save once every 5 minutes
         long now = System.nanoTime();
-        if ((now - lastConfigSave) < 5 * 60 * 1000000000L) { return; }
+        if ((now - lastConfigSave) < 2 * 60 * 1000000000L) { return; }
 
         if (configWrite != null && configWrite.isAlive()) {
-            Logger.getGlobal().severe("Couldn't write config files - save process is stuck.");
+            logger.error("Couldn't write config files - save process is stuck.");
             return;
         }
 
@@ -982,11 +1034,15 @@ public class MainController {
 	private UpdateThread updateSong;
 
 	public void updateSong(String path) {
+		updateSong(path, false);
+	}
+
+	public void updateSong(String path, boolean updateParentWhenMissing) {
 		if (updateSong == null || !updateSong.isAlive()) {
-			updateSong = new SongUpdateThread(path);
+			updateSong = new SongUpdateThread(path, updateParentWhenMissing);
 			updateSong.start();
 		} else {
-			Logger.getGlobal().warning("楽曲更新中のため、更新要求は取り消されました");
+			logger.warn("楽曲更新中のため、更新要求は取り消されました");
 		}
 	}
 
@@ -995,7 +1051,7 @@ public class MainController {
 			updateSong = new TableUpdateThread(reader);
 			updateSong.start();
 		} else {
-			Logger.getGlobal().warning("楽曲更新中のため、更新要求は取り消されました");
+			logger.warn("楽曲更新中のため、更新要求は取り消されました");
 		}
 	}
 
@@ -1029,15 +1085,17 @@ public class MainController {
 	class SongUpdateThread extends UpdateThread {
 
 		private final String path;
+		private final boolean updateParentWhenMissing;
 
-		public SongUpdateThread(String path) {
-			super("updating folder : " + (path == null ? "ALL" : path));
+		public SongUpdateThread(String path, boolean updateParentWhenMissing) {
+			super("updating folder : " + (path == null ? "ALL" : path) + ", update parent when missing :" + (updateParentWhenMissing ? "yes" : "no"));
 			this.path = path;
+			this.updateParentWhenMissing = updateParentWhenMissing;
 		}
 
 		public void run() {
 			ImGuiNotify.info(this.message);
-			getSongDatabase().updateSongDatas(path, config.getBmsroot(), false, getInfoDatabase());
+			getSongDatabase().updateSongDatas(path, config.getBmsroot(), false, updateParentWhenMissing, getInfoDatabase());
 		}
 	}
 
@@ -1109,16 +1167,16 @@ public class MainController {
 		}
 
 		public boolean send() {
-			Logger.getGlobal().info("IRへスコア送信中 : " + song.getTitle());
+			logger.info("IRへスコア送信中 : {}", song.getTitle());
 			lastTry = System.currentTimeMillis();
 			IRResponse<Object> send1 = ir.sendPlayData(new IRChartData(song), new bms.player.beatoraja.ir.IRScoreData(score));
 			retry++;
 			if(send1.isSucceeded()) {
-				Logger.getGlobal().info("IRスコア送信完了 : " + song.getTitle());
+				logger.info("IRスコア送信完了 : {}", song.getTitle());
 				isSent = true;
 				return true;
 			} else {
-				Logger.getGlobal().warning("IRスコア送信失敗 : " + send1.getMessage());
+				logger.warn("IRスコア送信失敗 : {}", send1.getMessage());
 				return false;
 			}
 

@@ -2,7 +2,8 @@ package bms.player.beatoraja.play.bga;
 
 import java.nio.file.Path;
 import java.util.*;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import bms.model.TimeLine;
 import bms.player.beatoraja.PixmapResourcePool;
@@ -16,6 +17,7 @@ import com.badlogic.gdx.graphics.Texture;
  * @author exch
  */
 public class BGImageProcessor {
+	private static final Logger logger = LoggerFactory.getLogger(BGImageProcessor.class);
 	
 	public static final String[] pic_extension = { "jpg", "jpeg", "gif", "bmp", "png", "tga" };
 	/**
@@ -23,19 +25,28 @@ public class BGImageProcessor {
 	 */
 	private Pixmap[] bgamap = new Pixmap[1000];
 	/**
+	 *
 	 * BGイメージのキャッシュ
 	 */
-	private Texture[] bgacache;
-	/**
-	 * キャッシュされているBGイメージID
-	 */
-	private int[] bgacacheid;
+	private Map<Integer, Texture> bgacache;
 
 	private final PixmapResourcePool cache;
 
 	public BGImageProcessor(int size, int maxgen) {
-		bgacache = new Texture[size];
-		bgacacheid = new int[size];
+		bgacache = new LinkedHashMap<>(size + 1, .75F, true) {
+			@Override
+			protected boolean removeEldestEntry(Map.Entry<Integer, Texture> eldest) {
+				if (size() > size) {
+					Texture tex = eldest.getValue();
+					if (tex != null) {
+						tex.dispose();
+					}
+					return true;
+				}
+				return false;
+			}
+		};
+
 		cache = new PixmapResourcePool(maxgen) {
 
 			protected Pixmap convert(Pixmap pixmap) {
@@ -74,50 +85,35 @@ public class BGImageProcessor {
 	 */
 	public void prepare(TimeLine[] timelines) {
 		long l = System.currentTimeMillis();
-		Arrays.fill(bgacacheid, -1);
-		for (Texture bga : bgacache) {
-			if (bga != null) {
-				bga.dispose();
-			}
-		}
-		Arrays.fill(bgacache, null);
+		bgacache.forEach((k, tex) -> tex.dispose());
+		bgacache.clear();
 
 		int count = 0;
 		for (TimeLine tl : timelines) {
 			int bga = tl.getBGA();
-			if (bga >= 0 && bgacache[bga % bgacache.length] == null && bga < bgamap.length && bgamap[bga] != null) {
+			if (bga >= 0 && !bgacache.containsKey(bga) && bga < bgamap.length && bgamap[bga] != null) {
 				getTexture(bga);
 				count++;
 			}
 
 			bga = tl.getLayer();
-			if (bga >= 0 && bgacache[bga % bgacache.length] == null && bga < bgamap.length && bgamap[bga] != null) {
+			if (bga >= 0 && bgacache.containsKey(bga) && bga < bgamap.length && bgamap[bga] != null) {
 				getTexture(bga);
 				count++;
 			}
 		}
-		Logger.getGlobal().info(
-				"BGAデータの事前Texture化 - BGAデータ数:" + count + " time(ms):" + (System.currentTimeMillis() - l));
+		logger.info("BGAデータの事前Texture化 - BGAデータ数:{} time(ms):{}", count, System.currentTimeMillis() - l);
 	}
 
 	public Texture getTexture(int id) {
-		final int cid = id % bgacache.length;
-		// BGイメージキャッシュにTextureがある場合
-		if (bgacacheid[cid] == id) {
-			return bgacache[cid];
+		if (bgacache.containsKey(id)) {
+			return bgacache.get(id);
 		}
 		// BGイメージキャッシュにTextureがない場合
 		if (id < bgamap.length && bgamap[id] != null){
-			if(bgacache[cid] == null) {
-				bgacache[cid] = new Texture(bgamap[id]);				
-			} else if(bgacache[cid].getWidth() != bgamap[id].getWidth() || bgacache[cid].getHeight() != bgamap[id].getHeight()){
-				bgacache[cid].dispose();
-				bgacache[cid] = new Texture(bgamap[id]);				
-			} else {
-				bgacache[cid].draw(bgamap[id], 0, 0);
-			}
-			bgacacheid[cid] = id;
-			return bgacache[cid];
+			Texture tex = new Texture(bgamap[id]);
+			bgacache.put(id, tex);
+			return tex;
 		}
 		return null;
 	}
@@ -126,12 +122,8 @@ public class BGImageProcessor {
 	 * リソースを開放する
 	 */
 	public void dispose() {
-		for (Texture bga : bgacache) {
-			if (bga != null) {
-				bga.dispose();
-			}
-		}
-		bgacache = new Texture[0];
+		bgacache.forEach((k, tex) -> tex.dispose());
+		bgacache.clear();
 
 		cache.dispose();
 	}	

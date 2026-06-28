@@ -11,13 +11,15 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -35,12 +37,15 @@ import java.util.regex.Pattern;
  * @since Tue, 10 Jun 2025 05:33 PM
  */
 public class HttpDownloadProcessor {
+    private static final Logger logger = LoggerFactory.getLogger(HttpDownloadProcessor.class);
     public static final Map<String, HttpDownloadSourceMeta> DOWNLOAD_SOURCES = new HashMap<>();
     public static final int MAXIMUM_DOWNLOAD_COUNT = 5;
-    // TODO: make this magic constants configurable? I think not very worthy though
-    public static final String DOWNLOAD_DIRECTORY = "http_download";
+    private String downloadDirectory;
 
     static {
+        // Ginger
+        HttpDownloadSourceMeta gingerDownloadSourceMeta = GingerDownloadSource.META;
+        DOWNLOAD_SOURCES.put(gingerDownloadSourceMeta.getName(), gingerDownloadSourceMeta);
         // Wriggle
         HttpDownloadSourceMeta wriggleDownloadSourceMeta = WriggleDownloadSource.META;
         DOWNLOAD_SOURCES.put(wriggleDownloadSourceMeta.getName(), wriggleDownloadSourceMeta);
@@ -60,13 +65,14 @@ public class HttpDownloadProcessor {
     private final MainController main;
     private final HttpDownloadSource httpDownloadSource;
 
-    public HttpDownloadProcessor(MainController main, HttpDownloadSource httpDownloadSource) {
+    public HttpDownloadProcessor(MainController main, HttpDownloadSource httpDownloadSource, String downloadDirectory) {
         this.main = main;
         this.httpDownloadSource = httpDownloadSource;
+        this.downloadDirectory = downloadDirectory;
     }
 
     public static HttpDownloadSourceMeta getDefaultDownloadSource() {
-        return WriggleDownloadSource.META;
+        return GingerDownloadSource.META;
     }
 
     private Optional<DownloadTask> getTaskById(int taskId) {
@@ -85,18 +91,19 @@ public class HttpDownloadProcessor {
      * @param taskName task name, normally sabun's name
      */
     public void submitMD5Task(String md5, String taskName) {
-        Logger.getGlobal().info(String.format("[HttpDownloadProcessor] Trying to submit new download task[%s](based on md5: %s)", taskName, md5));
+        logger.info("[HttpDownloadProcessor] Trying to submit new download task[{}](based on md5: {})", taskName, md5);
         String sourceName = httpDownloadSource.getName();
         String downloadURL;
         try {
             downloadURL = httpDownloadSource.getDownloadURLBasedOnMd5(md5);
         } catch (FileNotFoundException e) {
-            Logger.getGlobal().severe(String.format("[HttpDownloadProcessor] Remote server[%s] reports no such data", sourceName));
+            logger.error("[HttpDownloadProcessor] Remote server[{}] reports no such data", sourceName);
             ImGuiNotify.error(String.format("Cannot find specified song from %s", sourceName));
             return;
         } catch (RuntimeException e) {
             e.printStackTrace();
-            Logger.getGlobal().severe(String.format("[HttpDownloadProcessor] Cannot get download url from remote server[%s] due to unexpected exception: %s", sourceName, e.getMessage()));
+            logger.error("[HttpDownloadProcessor] Cannot get download url from remote server[{}] due to unexpected exception: {}", sourceName, e.getMessage());
+			ImGuiNotify.error(String.format("%s returns a severe error: %s", sourceName, e.getMessage()));
             return;
         }
 
@@ -108,7 +115,7 @@ public class HttpDownloadProcessor {
                 // NOTE: This reject strategy works for Konmai because the download url could be considered as a unique
                 // info, but not wriggle since it doesn't offer a meta query api.
                 if (tasks.values().stream().anyMatch(task -> task.getUrl().equals(downloadURL))) {
-                    Logger.getGlobal().severe(String.format("[HttpDownloadProcessor] Rejecting download task[%s] because duplication has been found", downloadURL));
+                    logger.error("[HttpDownloadProcessor] Rejecting download task[{}] because duplication has been found", downloadURL);
                     ImGuiNotify.warning("Already submitted");
                     return null;
                 }
@@ -125,7 +132,7 @@ public class HttpDownloadProcessor {
             downloadTask = submit.get();
         } catch (ExecutionException | InterruptedException e) {
             e.printStackTrace();
-            Logger.getGlobal().severe("Unexpected error from submitting download task: " + e.getMessage());
+			logger.error("Unexpected error from submitting download task: {}", e.getMessage());
             return;
         }
 
@@ -152,7 +159,7 @@ public class HttpDownloadProcessor {
             String taskName = downloadTask.getName();
             String downloadURL = downloadTask.getUrl();
             String hash = downloadTask.getHash();
-            Logger.getGlobal().info(String.format("[HttpDownloadProcessor] Trying to kick new download task[%s](%s)", taskName, downloadURL));
+            logger.info("[HttpDownloadProcessor] Trying to kick new download task[{}]({})", taskName, downloadURL);
             downloadTask.setDownloadTaskStatus(DownloadTask.DownloadTaskStatus.Downloading);
             Path result = null;
             // 1) Download file from remote http server
@@ -169,8 +176,9 @@ public class HttpDownloadProcessor {
             }
             // 2) Extract the compressed archive & update download directory automatically
             boolean successfullyExtracted = false;
+            String bmsDirectory = null;
             try {
-                extractCompressedFile(result.toFile(), null);
+                bmsDirectory = extractCompressedFile(result.toFile(), null);
                 successfullyExtracted = true;
                 downloadTask.setDownloadTaskStatus(DownloadTask.DownloadTaskStatus.Extracted);
             } catch (Exception e) {
@@ -182,7 +190,7 @@ public class HttpDownloadProcessor {
                 // I don't think this has any issue since user can always turn back to root directory
                 // and update the download directory manually
                 ImGuiNotify.info("Successfully downloaded & extracted. Trying to rebuild download directory");
-                main.updateSong(DOWNLOAD_DIRECTORY);
+                main.updateSong(bmsDirectory, true);
                 // If everything works well, trying to delete the downloaded archive
                 try {
                     Files.delete(result);
@@ -241,7 +249,7 @@ public class HttpDownloadProcessor {
 
             long contentLength = conn.getContentLengthLong();
             is = conn.getInputStream();
-            result = Path.of(DOWNLOAD_DIRECTORY, fileName);
+            result = Path.of(downloadDirectory, fileName);
             fos = new FileOutputStream(result.toFile());
 
             // TODO: We can bind the buffer to the worker thread instead of creating & releasing it repeatedly
@@ -255,11 +263,11 @@ public class HttpDownloadProcessor {
                 task.setDownloadSize(downloadBytes);
                 task.setContentLength(contentLength);
             }
-            Logger.getGlobal().info(String.format("[HttpDownloadProcessor] Download successfully to %s", result));
+            logger.info("[HttpDownloadProcessor] Download successfully to {}", result);
             task.setDownloadTaskStatus(DownloadTask.DownloadTaskStatus.Downloaded);
         } catch (Exception e) {
             e.printStackTrace();
-            Logger.getGlobal().info("[HttpDownloadProcessor] Failed to download file from url: " + e.getMessage());
+			logger.info("[HttpDownloadProcessor] Failed to download file from url: {}", e.getMessage());
             task.setDownloadSize(0);
             task.setContentLength(0);
             task.setErrorMessage(e.getMessage());
@@ -288,13 +296,20 @@ public class HttpDownloadProcessor {
      *
      * @param file       compressed archive
      * @param targetPath target directory, fallback to DOWNLOAD_DIRECTORY if null
+     * @return the path to the directory just extracted
      */
-    private void extractCompressedFile(File file, Path targetPath) {
-        Path resultDirectory = targetPath == null ? Path.of(DOWNLOAD_DIRECTORY) : targetPath;
+    private String extractCompressedFile(File file, Path targetPath) {
+        Path resultDirectory = targetPath == null ? Path.of(downloadDirectory) : targetPath;
+        String bmsDirectory = null;
         try (SevenZFile sevenZFile = SevenZFile.builder().setFile(file).get()) {
             SevenZArchiveEntry entry;
             while ((entry = sevenZFile.getNextEntry()) != null) {
-                if (entry.isDirectory()) continue;
+                if (entry.isDirectory()) {
+                    if (bmsDirectory == null) {
+                        bmsDirectory = Paths.get(resultDirectory.toString(), entry.getName()).toAbsolutePath().toString();
+                    }
+                    continue;
+                }
                 File outputFile = new File(resultDirectory.toString(), entry.getName());
                 outputFile.getParentFile().mkdirs();
 
@@ -311,5 +326,6 @@ public class HttpDownloadProcessor {
             e.printStackTrace();
             throw new RuntimeException(e.getMessage());
         }
+        return bmsDirectory;
     }
 }

@@ -12,7 +12,8 @@ import javafx.scene.input.ClipboardContent;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.stream.Collectors;
 
 import static bms.player.beatoraja.SystemSoundManager.SoundType.FOLDER_OPEN;
@@ -115,7 +116,7 @@ public enum MusicSelectCommand {
                 }
 
                 if (!startdownload) {
-                    Logger.getGlobal().info("ダウンロードは開始されませんでした。");
+					LoggerFactory.getLogger(MusicSelectCommand.class).info("ダウンロードは開始されませんでした。");
                 }
                 break;
             }
@@ -126,13 +127,26 @@ public enum MusicSelectCommand {
 		if (current instanceof SongBar) {
 			final SongData song = ((SongBar) current).getSongData();
 			if (song == null) {
-				Logger.getGlobal().info("Not a valid song bar? Skipped...");
+				LoggerFactory.getLogger(MusicSelectCommand.class).info("Not a valid song bar? Skipped...");
 				return ;
 			}
-			Logger.getGlobal().info("Missing song md5: " + song.getMd5());
+			LoggerFactory.getLogger(MusicSelectCommand.class).info("Missing song md5: {}", song.getMd5());
 			if (song.getMd5() != null && !song.getMd5().isEmpty()) {
 				selector.main.getHttpDownloadProcessor().submitMD5Task(song.getMd5(), song.getTitle());
 			}
+		}
+	}),
+	DOWNLOAD_COURSE_HTTP(selector -> {
+		Bar current = selector.getBarManager().getSelected();
+		if (current instanceof GradeBar) {
+			final SongData[] songs = ((GradeBar) current).getSongDatas();
+            for (SongData song : songs) {
+	            LoggerFactory.getLogger(MusicSelectCommand.class).info("Missing song md5: {}", song.getMd5());
+                if (song.getMd5() != null && !song.getMd5().isEmpty()) {
+                    selector.main.getHttpDownloadProcessor().submitMD5Task(song.getMd5(),
+                                                                           song.getTitle());
+                }
+            }
 		}
 	}),
 	/**
@@ -158,9 +172,9 @@ public enum MusicSelectCommand {
 	 */
     SHOW_CONTEXT_MENU(selector -> {
 		final BarManager bar = selector.getBarManager();
-		Bar current = selector.getBarManager().getSelected();
-        boolean alreadyInContextMenu =
-            bar.getDirectory().size > 0 && bar.getDirectory().last() instanceof ContextMenuBar;
+		Bar current = bar.getSelected();
+        Bar previous = bar.getDirectory().isEmpty() ? null : bar.getDirectory().last();
+        boolean alreadyInContextMenu = previous instanceof ContextMenuBar;
         if (current instanceof SongBar) {
             SongData song = ((SongBar)current).getSongData();
             if (!alreadyInContextMenu) {
@@ -174,7 +188,19 @@ public enum MusicSelectCommand {
                 bar.updateBar(new ContextMenuBar(selector, ((TableBar)current)));
                 selector.play(FOLDER_OPEN);
             }
-            else if (selector.getBarManager().updateBar(current)) { selector.play(FOLDER_OPEN); }
+            else if (bar.updateBar(current)) { selector.play(FOLDER_OPEN); }
+        }
+        else if (current instanceof HashBar && previous instanceof TableBar) {
+            // HashBars are also used in other places, but this will open
+            // the context menu specific to difficulty table folders
+            // checking for isEnableHttp because batch downloading is
+            // currently the ontry entry in this menu
+            if (!alreadyInContextMenu && selector.main.getConfig().isEnableHttp()) {
+                bar.updateBar(
+                    new ContextMenuBar(selector, ((TableBar)previous), ((HashBar)current)));
+                selector.play(FOLDER_OPEN);
+            }
+            else if (bar.updateBar(current)) { selector.play(FOLDER_OPEN); }
         }
     });
 

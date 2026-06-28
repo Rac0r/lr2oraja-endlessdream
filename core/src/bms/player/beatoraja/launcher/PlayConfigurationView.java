@@ -8,7 +8,9 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.*;
 import java.util.*;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import java.util.function.Supplier;
 
 import bms.player.beatoraja.exceptions.PlayerConfigException;
 import bms.player.beatoraja.external.ScoreDataImporter;
@@ -16,6 +18,8 @@ import bms.player.beatoraja.external.ScoreDataImporter;
 import bms.tool.mdprocessor.HttpDownloadProcessor;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import javafx.animation.AnimationTimer;
+import javafx.beans.binding.Bindings;
 import org.apache.commons.lang3.compare.ComparableUtils;
 
 import bms.model.Mode;
@@ -54,6 +58,7 @@ import twitter4j.conf.ConfigurationBuilder;
  * @author exch
  */
 public class PlayConfigurationView implements Initializable {
+	private static final Logger logger = LoggerFactory.getLogger(PlayConfigurationView.class);
     // TODO スキンプレビュー機能
 
 	@FXML
@@ -352,7 +357,7 @@ public class PlayConfigurationView implements Initializable {
 		obsController.init(this);
 
 		checkNewVersion();
-		Logger.getGlobal().info("初期化時間(ms) : " + (System.currentTimeMillis() - t));
+		logger.info("初期化時間(ms) : " + (System.currentTimeMillis() - t));
 	}
 
     @FXML
@@ -424,7 +429,7 @@ public class PlayConfigurationView implements Initializable {
                                     desktop.browse(uri);
                                 }
                                 catch (Exception e) {
-                                    Logger.getGlobal().warning("最新版URLアクセス時例外:" + e.getMessage());
+                                    logger.warn("最新版URLアクセス時例外:" + e.getMessage());
                                 }
                             });
 						}
@@ -525,7 +530,7 @@ public class PlayConfigurationView implements Initializable {
         try {
             player = PlayerConfig.readPlayerConfig(config.getPlayerpath(), players.getValue());
         } catch (PlayerConfigException e) {
-            Logger.getGlobal().warning("Player config failed to load: " + e.getLocalizedMessage());
+            logger.warn("Player config failed to load: " + e.getLocalizedMessage());
 			player = PlayerConfig.validatePlayerConfig("player1", new PlayerConfig());
         }
         playername.setText(player.getName());
@@ -847,7 +852,8 @@ public class PlayConfigurationView implements Initializable {
 
 		ResourceBundle bundle = ResourceBundle.getBundle("resources.UIResources");
 		final Stage loadingBarStage = new Stage();
-        Runnable progressRunnable = () -> {
+		SongDatabaseUpdateListener songDatabaseUpdateListener = new SongDatabaseUpdateListener();
+		Runnable progressRunnable = () -> {
 			// JavaFX UI code must be run inside a Platform run context
             Platform.runLater(new Runnable() {
                 @Override
@@ -859,13 +865,33 @@ public class PlayConfigurationView implements Initializable {
                     loadingBarStage.initStyle(StageStyle.UTILITY);
 
                     ProgressBar progressBar = new ProgressBar();
-                    progressBar.setPrefWidth(300);
+                    progressBar.setPrefWidth(400);
 
                     Label messageLabel = new Label(bundle.getString("PROGRESS_BMS_LABEL"));
+					Supplier<String> getProcessStatusText = () -> String.format(
+							bundle.getString("PROGRESS_BMS_STATUS"),
+							songDatabaseUpdateListener.getBMSFilesCount(),
+							songDatabaseUpdateListener.getProcessedBMSFilesCount(),
+							songDatabaseUpdateListener.getNewBMSFilesCount()
+					);
+					Label processStatusLabel = new Label(getProcessStatusText.get());
+					AnimationTimer timer = new AnimationTimer() {
+						private long lastUpdate = -1;
+						private final long interval = 1000_000_000;
+
+						@Override
+						public void handle(long now) {
+							if (now - lastUpdate >= interval) {
+								processStatusLabel.setText(getProcessStatusText.get());
+								lastUpdate = now;
+							}
+						}
+					};
+					timer.start();
 
                     VBox root = new VBox(10);
                     root.setStyle("-fx-padding: 20; -fx-alignment: center;");
-                    root.getChildren().addAll(messageLabel, progressBar);
+                    root.getChildren().addAll(messageLabel, processStatusLabel, progressBar);
 
                     Scene scene = new Scene(root);
                     loadingBarStage.setScene(scene);
@@ -874,6 +900,7 @@ public class PlayConfigurationView implements Initializable {
 					// the application can still be force killed by the user if necessary
 					loadingBarStage.setOnCloseRequest(Event::consume);
                     loadingBarStage.show();
+					loadingBarStage.setOnHidden(e -> timer.stop());
                 }
             });
         };
@@ -883,9 +910,9 @@ public class PlayConfigurationView implements Initializable {
                 SongDatabaseAccessor songdb = MainLoader.getScoreDatabaseAccessor();
                 SongInformationAccessor infodb = config.isUseSongInfo() ?
                         new SongInformationAccessor(Paths.get("songinfo.db").toString()) : null;
-                Logger.getGlobal().info("song.db更新開始");
-                songdb.updateSongDatas(updatepath, config.getBmsroot(), updateAll, infodb);
-                Logger.getGlobal().info("song.db更新完了");
+                logger.info("song.db更新開始");
+                songdb.updateSongDatas(updatepath, config.getBmsroot(), updateAll, false, infodb, songDatabaseUpdateListener);
+                logger.info("song.db更新完了");
                 songUpdated = true;
 
 				// Once again, JavaFX UI code must be run inside a Platform context. Hide progress bar and resume

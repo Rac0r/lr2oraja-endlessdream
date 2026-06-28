@@ -5,7 +5,8 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.util.*;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
@@ -19,7 +20,7 @@ import bms.player.beatoraja.CourseData.CourseDataConstraint;
 import bms.player.beatoraja.ScoreData.SongTrophy;
 import bms.player.beatoraja.ScoreDatabaseAccessor.ScoreDataCollector;
 import bms.player.beatoraja.ScoreLogDatabaseAccessor.ScoreLog;
-import bms.player.beatoraja.ir.LR2IRConnection;
+import bms.player.beatoraja.ir.LR2IRAccessor;
 import bms.player.beatoraja.song.SongData;
 
 import com.badlogic.gdx.utils.Json;
@@ -32,6 +33,7 @@ import com.badlogic.gdx.utils.StringBuilder;
  * @author exch
  */
 public final class PlayDataAccessor {
+	private static final Logger logger = LoggerFactory.getLogger(PlayDataAccessor.class);
 
 	// TODO スコアハッシュを付与するかどうかの判定(前のスコアハッシュの正当性を確認できなかった時)
 	// TODO BATTLEは別ハッシュで登録したい}			
@@ -73,7 +75,7 @@ public final class PlayDataAccessor {
 			scorelogdb = new ScoreLogDatabaseAccessor(playerpath + File.separatorChar + player + File.separatorChar + "scorelog.db");
 			scoredatalogdb = new ScoreDataLogDatabaseAccessor(playerpath + File.separatorChar + player + File.separatorChar + "scoredatalog.db");
 			// Share scoredb to LR2IR
-			LR2IRConnection.setScoreDatabaseAccessor(scoredb);
+			LR2IRAccessor.setScoreDatabaseAccessor(scoredb);
 		} catch (ClassNotFoundException e) {
 			e.printStackTrace();
 		}
@@ -296,7 +298,7 @@ public final class PlayDataAccessor {
 			}
 		}
 		updatePlayerData(newscore, time);
-		Logger.getGlobal().info("スコアデータベース更新完了 ");
+		logger.info("スコアデータベース更新完了 ");
 	}
 	
 	public ScoreData readScoreData(String hash, boolean ln, int lnmode, int option,
@@ -431,7 +433,7 @@ public final class PlayDataAccessor {
 			scorelogdb.setScoreLog(log);
 		}
 
-		Logger.getGlobal().info("スコアデータベース更新完了 ");
+		logger.info("スコアデータベース更新完了 ");
 
 	}
 
@@ -664,7 +666,7 @@ public final class PlayDataAccessor {
 			fw.write(json.prettyPrint(rd));
 			fw.flush();
 			fw.close();
-			Logger.getGlobal().info("コースリプレイを保存:" + path);
+			logger.info("コースリプレイを保存:{}", path);
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
